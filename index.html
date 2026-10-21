@@ -142,20 +142,27 @@ const OPT={
   rentKind:{gider:'Ödediğimiz kira',gelir:'Aldığımız kira'},
   place:{ev:'Ev',isyeri:'İşyeri',diger:'Diğer'},
   rentStatus:{aktif:'Aktif',pasif:'Pasif'},
-  debtType:{kredi:'Banka kredisi',borc:'Borcumuz',alacak:'Alacağımız'}
+  debtType:{kredi:'Banka kredisi',borc:'Borcumuz',alacak:'Alacağımız'},
+  itemKind:{gider:'Ödeme (gider)',gelir:'Tahsilat (gelir)'},
+  freq:{aylik:'Her ay',tek:'Tek sefer'}
 };
 const ACC_ORDER=Object.keys(OPT.accType);
-const COLS=['accounts','incomes','rents','debts'];
+const COLS=['accounts','incomes','rents','debts','items'];
+const BUILTIN_TABS=[['accounts','Hesaplar & Kartlar'],['incomes','İş Gelirleri'],['rents','Kiralar'],['debts','Borç & Krediler']];
+const DEFAULT_SECTIONS=()=>[{id:'faturalar',name:'Faturalar'}];
 const isDebtAcc=a=>a.type==='kart'||a.type==='kmh';
 const remainingOf=x=>{const i=num(x.installment),c=num(x.count);return i&&c?Math.max(0,c-num(x.paidCount))*i:num(x.remaining||x.total)};
 
 /* ================= Veri ================= */
 const LS_DATA='af_data',LS_CFG='af_cfg',LS_OWNER='af_owner';
-function emptyData(){return{format:'aile-finans',version:1,settings:{p1:'Ben',p2:'Eşim',u:0},accounts:[],incomes:[],rents:[],debts:[],paid:{},deleted:{}}}
+function emptyData(){return{format:'aile-finans',version:1,settings:{p1:'Ben',p2:'Eşim',sections:DEFAULT_SECTIONS(),hidden:[],u:0},accounts:[],incomes:[],rents:[],debts:[],items:[],paid:{},deleted:{}}}
 function normalize(d){
   const e=emptyData();d=d&&typeof d==='object'?d:{};
   for(const c of COLS)e[c]=Array.isArray(d[c])?d[c].filter(r=>r&&r.id):[];
   e.settings={...e.settings,...(d.settings||{})};
+  if(!Array.isArray(e.settings.sections))e.settings.sections=DEFAULT_SECTIONS();
+  e.settings.sections=e.settings.sections.filter(s=>s&&s.id&&s.name);
+  if(!Array.isArray(e.settings.hidden))e.settings.hidden=[];
   for(const[k,v]of Object.entries(d.paid||{}))e.paid[k]=typeof v==='object'&&v?v:{v:!!v,u:0};
   e.deleted={...(d.deleted||{})};
   return e;
@@ -245,8 +252,32 @@ const SCHEMAS={
     defaults:()=>({type:'kredi',paidCount:0,owner:state.owner==='all'?'p1':state.owner}),
     sort:(a,b)=>String(a.type).localeCompare(String(b.type))||String(a.title).localeCompare(String(b.title),'tr'),
     summary:rows=>{const d=sum(rows.filter(x=>x.type!=='alacak'),remainingOf),a=sum(rows.filter(x=>x.type==='alacak'),remainingOf),m=sum(rows.filter(x=>x.type!=='alacak'&&(!num(x.count)||num(x.paidCount)<num(x.count))),x=>num(x.installment));
-      return `<span>Kalan borç: <b class="out">${money(d)}</b></span><span>Aylık taksit yükü: <b>${money(m)}</b></span><span>Alacaklar: <b class="in">${money(a)}</b></span>`}}
+      return `<span>Kalan borç: <b class="out">${money(d)}</b></span><span>Aylık taksit yükü: <b>${money(m)}</b></span><span>Alacaklar: <b class="in">${money(a)}</b></span>`}},
+  items:{title:'Özel başlık',singular:'Kayıt',add:'+ Kayıt ekle',
+    fields:[
+      {key:'title',label:'Ad',type:'text',required:true,ph:'Örn. Elektrik, Doğalgaz, İnternet'},
+      {key:'provider',label:'Kurum / abone no',type:'text',ph:'Örn. Enerjisa · 12345678'},
+      {key:'kind',label:'Tür',type:'select',opt:'itemKind',required:true},
+      {key:'freq',label:'Sıklık',type:'select',opt:'freq',required:true},
+      {key:'amount',label:'Tutar',type:'money',hint:'Her ay değişiyorsa ortalama yazın; Özet ekranında o ayın tutarını düzeltebilirsiniz'},
+      {key:'day',label:'Ödeme günü',type:'day',hint:'Her ay için: ayın kaçında'},
+      {key:'date',label:'Tarih',type:'date',hint:'Sadece tek seferlik kayıtlar için'},
+      {key:'owner',label:'Kimin',type:'owner',required:true},
+      {key:'account',label:'Hesap / kart',type:'account'},
+      {key:'note',label:'Not',type:'textarea',wide:true}],
+    cols:['title','provider',{label:'Tutar',num:true,render:r=>`<span class="amt ${r.kind==='gelir'?'in':'out'}">${money(r.amount)}</span>`},
+      {label:'Ne zaman',render:r=>r.freq==='tek'?esc(fmtDate(r.date)):(r.day?`Her ay, ${r.day}. gün`:'Her ay')},
+      {label:'Bu ay',render:r=>{const k=itemKey(r,curYM());if(!k)return'';return isPaid(k)?`<span class="muted">✓ ${r.kind==='gelir'?'Alındı':'Ödendi'}</span>`:'<span class="badge warn">Bekliyor</span>'}},
+      'owner','account'],
+    defaults:()=>({kind:'gider',freq:'aylik',owner:state.owner==='all'?'ortak':state.owner,section:state.curSec}),
+    sort:(a,b)=>String(a.freq).localeCompare(String(b.freq))||(+a.day||0)-(+b.day||0)||String(a.title).localeCompare(String(b.title),'tr'),
+    summary:rows=>{const ym=curYM(),act=rows.filter(r=>itemKey(r,ym)),out=act.filter(r=>r.kind!=='gelir'),inn=act.filter(r=>r.kind==='gelir');
+      const tot=sum(out,r=>amtOf(itemKey(r,ym),r.amount)),paid=sum(out.filter(r=>isPaid(itemKey(r,ym))),r=>amtOf(itemKey(r,ym),r.amount));
+      return `<span>Bu ay ödenecek: <b class="out">${money(tot)}</b></span><span>Ödenen: <b>${money(paid)}</b></span><span>Kalan: <b class="out">${money(tot-paid)}</b></span>${inn.length?`<span>Bu ay gelecek: <b class="in">${money(sum(inn,r=>amtOf(itemKey(r,ym),r.amount)))}</b></span>`:''}`}}
 };
+function itemKey(r,ym){if(r.freq==='tek')return r.date&&r.date.startsWith(ym)?`item:${r.id}:${ym}`:null;if(r.startYM&&r.startYM>ym)return null;return `item:${r.id}:${ym}`}
+function amtOf(key,def){const o=key&&state.data.paid['amt:'+key];return o&&o.v&&o.a!=null&&o.a!==''?num(o.a):num(def)}
+const sectionById=id=>state.data.settings.sections.find(s=>s.id===id);
 
 function display(f,v){
   if(v===''||v==null)return'';
@@ -280,6 +311,12 @@ function monthlyItems(ym){
     if(a.type!=='kart'||!a.dueDay)continue;
     items.push({key:`card:${a.id}:${ym}`,day:+a.dueDay,title:`${a.name} — son ödeme`,sub:`${a.bank||'Kredi kartı'}${a.cutDay?` · kesim günü ${a.cutDay}`:''} · güncel borç`,amount:num(a.balance),dir:'out',owner:a.owner});
   }
+  for(const r of fo(d.items)){
+    const sec=sectionById(r.section);if(!sec)continue;
+    const key=itemKey(r,ym);if(!key)continue;
+    const day=r.freq==='tek'?+r.date.slice(8,10):(+r.day||1);
+    items.push({key,day,title:r.title,sub:`${sec.name}${r.provider?' · '+r.provider:''}`,amount:amtOf(key,r.amount),def:num(r.amount),dir:r.kind==='gelir'?'in':'out',owner:r.owner,editable:true});
+  }
   return items.sort((a,b)=>a.day-b.day||a.title.localeCompare(b.title,'tr'));
 }
 function togglePaid(key,debtId){
@@ -290,17 +327,25 @@ function togglePaid(key,debtId){
 }
 
 /* ================= Görünümler ================= */
-const TABS=[['ozet','Özet'],['accounts','Hesaplar & Kartlar'],['incomes','İş Gelirleri'],['rents','Kiralar'],['debts','Borç & Krediler'],['ayarlar','Ayarlar']];
+function tabsList(){
+  const s=state.data.settings,hid=s.hidden||[];
+  return [['ozet','Özet'],...BUILTIN_TABS.filter(([k])=>!hid.includes(k)),...s.sections.map(x=>['sec:'+x.id,x.name]),['ayarlar','Ayarlar']];
+}
 
 function render(){
   const ae=document.activeElement,aeId=ae&&ae.id,sel=ae&&ae.selectionStart!=null?[ae.selectionStart,ae.selectionEnd]:null;
-  $('#tabs').innerHTML=TABS.map(([k,l])=>`<button class="tab ${state.tab===k?'on':''}" data-act="tab" data-tab="${k}">${l}</button>`).join('');
+  const tabs=tabsList();
+  if(!tabs.some(([k])=>k===state.tab))state.tab='ozet';
+  $('#tabs').innerHTML=tabs.map(([k,l])=>`<button class="tab ${state.tab===k?'on':''}" data-act="tab" data-tab="${esc(k)}">${esc(l)}</button>`).join('');
   $('#ownerFilter').innerHTML=[['all','👥 Hepsi'],['p1',ownerName('p1')],['p2',ownerName('p2')],['ortak','Ortak']].map(([k,l])=>`<option value="${k}" ${state.owner===k?'selected':''}>${esc(l)}</option>`).join('');
   const v=$('#view');
+  state.curSec=null;
   if(state.tab==='ozet')v.innerHTML=viewDashboard();
   else if(state.tab==='ayarlar')v.innerHTML=viewSettings();
+  else if(state.tab.startsWith('sec:')){state.curSec=state.tab.slice(4);v.innerHTML=viewList('items',sectionById(state.curSec))}
   else if(SCHEMAS[state.tab])v.innerHTML=viewList(state.tab);
   else{state.tab='ozet';return render()}
+  const on=$('.tab.on');if(on&&on.scrollIntoView)try{on.scrollIntoView({block:'nearest',inline:'nearest'})}catch{}
   if(aeId){const el=document.getElementById(aeId);if(el&&el!==document.activeElement){el.focus();if(sel)try{el.setSelectionRange(sel[0],sel[1])}catch{}}}
 }
 
@@ -327,8 +372,8 @@ function viewDashboard(){
       <input type="checkbox" class="chk" data-act="toggle" data-key="${esc(it.key)}" ${it.debt?`data-debt="${esc(it.debt)}"`:''} ${done?'checked':''} title="${it.dir==='in'?'Tahsil edildi':'Ödendi'}">
       <div class="day">${it.day}<small>${MONTHS[+ym.slice(5)-1].slice(0,3)}</small></div>
       <div class="t"><b>${esc(it.title)}${late?'<span class="badge late">Gecikti</span>':soon?'<span class="badge warn">Yaklaşıyor</span>':''}</b><small>${esc(it.sub)} ${state.owner==='all'?ownerPill(it.owner):''}</small></div>
-      <div class="amt ${it.dir}">${it.dir==='in'?'+':'−'}${money(it.amount)}</div></div>`}).join('')
-    :`<div class="empty">Bu ay için kira, taksit veya kart ödemesi yok.<br>Kiralar, Borç & Krediler veya Hesaplar sekmesinden ekleyin.</div>`;
+      ${it.editable?`<button class="amt ${it.dir} ghost sm" style="border:0" data-act="setamt" data-key="${esc(it.key)}" data-def="${it.def}" title="Bu ayın tutarını değiştir">${it.dir==='in'?'+':'−'}${money(it.amount)} ✎</button>`:`<div class="amt ${it.dir}">${it.dir==='in'?'+':'−'}${money(it.amount)}</div>`}</div>`}).join('')
+    :`<div class="empty">Bu ay için kira, taksit, fatura veya kart ödemesi yok.<br>İlgili sekmeden ekleyin.</div>`;
   const tOut=sum(outs,i=>i.amount),tOutPaid=sum(outs.filter(i=>isPaid(i.key)),i=>i.amount),tIn=sum(ins,i=>i.amount),tInGot=sum(ins.filter(i=>isPaid(i.key)),i=>i.amount);
 
   // Hatırlatmalar
@@ -372,9 +417,10 @@ function viewDashboard(){
   </div>`;
 }
 
-function viewList(col){
-  const S=SCHEMAS[col];let rows=fo(state.data[col]);
-  const q=(state.q[col]||'').toLocaleLowerCase('tr');
+function viewList(col,sec){
+  const S0=SCHEMAS[col],S=sec?{...S0,title:sec.name}:S0;let rows=fo(state.data[col]);
+  if(sec)rows=rows.filter(r=>r.section===sec.id);
+  const q=(state.q[state.tab]||'').toLocaleLowerCase('tr');
   let monthSel='';
   if(col==='incomes'){
     const ms=[...new Set(fo(state.data.incomes).map(i=>(i.date||'').slice(0,7)).filter(Boolean))].sort().reverse();
@@ -386,8 +432,8 @@ function viewList(col){
   const cols=S.cols.map(c=>typeof c==='string'?{f:S.fields.find(x=>x.key===c)}:c);
   const head=cols.map(c=>`<th class="${c.num||(c.f&&c.f.type==='money')?'num':''}">${esc(c.label||c.f.label)}</th>`).join('')+'<th></th>';
   const body=rows.map(r=>`<tr>${cols.map(c=>c.render?`<td class="${c.num?'num':''}">${c.render(r)}</td>`:`<td class="${c.f.type==='money'?'num':''}">${cellHTML(c.f,r[c.f.key])}</td>`).join('')}
-    <td class="act"><button class="sm" data-act="edit" data-col="${col}" data-id="${r.id}">Düzenle</button> ${col==='incomes'?`<button class="sm ghost" data-act="dup" data-col="${col}" data-id="${r.id}" title="Kopyala">⧉</button> `:''}<button class="sm ghost danger" data-act="del" data-col="${col}" data-id="${r.id}" title="Sil">✕</button></td></tr>`).join('');
-  return `<div class="toolbar"><h2>${S.title}</h2>${monthSel}<input id="q" type="search" placeholder="Ara…" value="${esc(state.q[col]||'')}"><button class="primary" data-act="new" data-col="${col}">${S.add}</button></div>
+    <td class="act"><button class="sm" data-act="edit" data-col="${col}" data-id="${r.id}">Düzenle</button> ${col==='incomes'||col==='items'?`<button class="sm ghost" data-act="dup" data-col="${col}" data-id="${r.id}" title="Kopyala">⧉</button> `:''}<button class="sm ghost danger" data-act="del" data-col="${col}" data-id="${r.id}" title="Sil">✕</button></td></tr>`).join('');
+  return `<div class="toolbar"><h2>${esc(S.title)}</h2>${monthSel}<input id="q" type="search" placeholder="Ara…" value="${esc(state.q[state.tab]||'')}"><button class="primary" data-act="new" data-col="${col}">${S.add}</button></div>
   <div class="summary">${S.summary(rows)}</div>
   ${rows.length?`<div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`:`<div class="panel empty">Kayıt yok. <b>${S.add}</b> ile ekleyin.</div>`}`;
 }
@@ -399,6 +445,18 @@ function viewSettings(){
     <label><span>1. kişi</span><input id="s_p1" value="${esc(s.p1)}"></label>
     <label><span>2. kişi</span><input id="s_p2" value="${esc(s.p2)}"></label></div>
     <div class="actions" style="justify-content:flex-start"><button class="primary" data-act="save-names">Kaydet</button></div></section>
+
+  <section class="panel"><h3>Başlıklar <small>sekmeleri ekleyin, adlandırın, gizleyin</small></h3>
+    <p class="note" style="margin:0 0 10px">Kendi başlıklarınızı ekleyebilirsiniz (örn. Faturalar, Aidat, Okul, Sigorta). Her başlıktaki aylık ödemeler Özet ekranındaki listeye de gelir.</p>
+    ${s.sections.length?s.sections.map((x,i)=>`<div class="item" style="gap:8px">
+      <input class="secname" data-id="${esc(x.id)}" value="${esc(x.name)}" style="flex:1">
+      <button class="sm ghost" data-act="sec-move" data-id="${esc(x.id)}" data-k="-1" ${i===0?'disabled':''} title="Yukarı">↑</button>
+      <button class="sm ghost" data-act="sec-move" data-id="${esc(x.id)}" data-k="1" ${i===s.sections.length-1?'disabled':''} title="Aşağı">↓</button>
+      <button class="sm ghost danger" data-act="sec-del" data-id="${esc(x.id)}" title="Başlığı sil">✕ Sil</button></div>`).join(''):'<div class="muted" style="padding:6px 0">Henüz özel başlık yok.</div>'}
+    <div class="item" style="gap:8px"><input id="newSec" placeholder="Yeni başlık adı (örn. Aidat)" style="flex:1"><button data-act="sec-add">+ Başlık ekle</button></div>
+    <p class="note" style="margin:14px 0 6px"><b>Hazır sekmeler</b> — kullanmadıklarınızı gizleyebilirsiniz (veriler silinmez):</p>
+    <div class="set">${BUILTIN_TABS.map(([k,l])=>`<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" class="tabvis" data-k="${k}" style="width:auto" ${(s.hidden||[]).includes(k)?'':'checked'}> ${esc(l)}</label>`).join('')}</div>
+    <div class="actions" style="justify-content:flex-start"><button class="primary" data-act="save-sections">Başlıkları kaydet</button></div></section>
 
   <section class="panel"><h3>GitHub senkronizasyonu <small>${cfgOk()?'✓ bağlı':'bağlı değil'}</small></h3>
     <p class="note" style="margin:0 0 10px">Veriler gizli (private) bir GitHub deposundaki tek bir dosyada tutulur; ikiniz de aynı depoya bağlanınca aynı verileri görürsünüz. Token ve parola sadece bu cihazda saklanır, hiçbir yere gönderilmez (yalnızca GitHub'a).</p>
@@ -439,11 +497,12 @@ function openForm(col,id,copyFrom){
   const S=SCHEMAS[col],dlg=$('#dlg'),form=$('#dlgForm');
   const rec=id?state.data[col].find(r=>r.id===id):copyFrom?{...copyFrom,date:todayISO()}:S.defaults();
   if(!rec)return;
-  form.innerHTML=`<h3>${id?'Düzenle':'Yeni'}: ${S.singular}</h3><div class="fgrid">${S.fields.map(f=>fieldHTML(f,rec[f.key])).join('')}</div>
+  const secName=col==='items'&&sectionById(rec.section)?sectionById(rec.section).name:S.singular;
+  form.innerHTML=`<h3>${id?'Düzenle':'Yeni'}: ${esc(secName)}</h3><div class="fgrid">${S.fields.map(f=>fieldHTML(f,rec[f.key])).join('')}</div>
     <div class="actions"><button type="button" class="ghost" data-act="dlg-close">Vazgeç</button><button type="submit" class="primary">Kaydet</button></div>`;
   form.onsubmit=e=>{
     e.preventDefault();
-    const out=id?{...rec}:{id:uid()};
+    const out=id?{...rec}:{id:uid(),...(rec.section?{section:rec.section}:{})};
     for(const f of S.fields){
       let v=(form.elements[f.key].value||'').trim();
       if(f.type==='money')v=v===''?'':num(v);
@@ -459,6 +518,19 @@ function openForm(col,id,copyFrom){
 }
 
 function commit(){saveLocal();render();schedulePush()}
+function setSettings(patch){state.data.settings={...state.data.settings,...patch,u:now()};commit()}
+function readSecNames(){
+  const names={};document.querySelectorAll('.secname').forEach(i=>{const v=i.value.trim();if(v)names[i.dataset.id]=v});
+  return state.data.settings.sections.map(s=>({...s,name:names[s.id]||s.name}));
+}
+function openAmount(key,def){
+  const dlg=$('#dlg'),form=$('#dlgForm'),o=state.data.paid['amt:'+key],cur=o&&o.v&&o.a!=null?o.a:'';
+  form.innerHTML=`<h3>Bu ayın tutarı</h3><div class="fgrid"><label class="wide"><span>Tutar</span><input name="a" inputmode="decimal" value="${cur===''?'':esc(String(cur).replace('.',','))}" placeholder="${esc(String(def).replace('.',','))}"><small>Boş bırakırsanız kayıttaki tutar (${money(def)}) kullanılır.</small></label></div>
+    <div class="actions"><button type="button" class="ghost" data-act="dlg-close">Vazgeç</button><button type="submit" class="primary">Kaydet</button></div>`;
+  form.onsubmit=e=>{e.preventDefault();const v=form.elements.a.value.trim();
+    state.data.paid['amt:'+key]=v===''?{v:false,a:null,u:now()}:{v:true,a:num(v),u:now()};dlg.close();commit();toast('Kaydedildi')};
+  dlg.showModal();form.elements.a.focus();
+}
 
 /* ================= Birleştirme (iki kişi aynı anda düzenlerse) ================= */
 function merge(a,b){
@@ -581,6 +653,11 @@ function loadSample(){
     {id:id(),type:'kredi',title:'Taşıt kredisi',lender:'Garanti',owner:'p1',total:400000,installment:14200,count:36,paidCount:11,dueDay:15,rate:'%2,9 aylık',u},
     {id:id(),type:'kredi',title:'İhtiyaç kredisi',lender:'İş Bankası',owner:'p2',total:120000,installment:8100,count:24,paidCount:20,dueDay:22,u},
     {id:id(),type:'alacak',title:'Kardeşe verilen borç',lender:'Ali',owner:'ortak',total:25000,remaining:15000,u});
+  const fs=(d.settings.sections[0]||{}).id;
+  if(fs)d.items.push(
+    {id:id(),section:fs,title:'Elektrik',provider:'Enerjisa',kind:'gider',freq:'aylik',amount:1450,day:12,owner:'ortak',u},
+    {id:id(),section:fs,title:'Doğalgaz',provider:'İGDAŞ',kind:'gider',freq:'aylik',amount:2100,day:18,owner:'ortak',u},
+    {id:id(),section:fs,title:'İnternet',provider:'Türk Telekom',kind:'gider',freq:'aylik',amount:650,day:8,owner:'p1',u});
   commit();toast('Örnek veriler eklendi — istediğiniz zaman silebilirsiniz');
 }
 
@@ -600,7 +677,17 @@ document.addEventListener('click',async e=>{
       state.data[col]=state.data[col].filter(x=>x.id!==id);state.data.deleted[id]=now();commit();toast('Silindi');break}
     case'dlg-close':$('#dlg').close();break;
     case'sample':loadSample();break;
-    case'save-names':state.data.settings={p1:$('#s_p1').value.trim()||'Ben',p2:$('#s_p2').value.trim()||'Eşim',u:now()};commit();toast('Kaydedildi');break;
+    case'save-names':setSettings({p1:$('#s_p1').value.trim()||'Ben',p2:$('#s_p2').value.trim()||'Eşim'});toast('Kaydedildi');break;
+    case'sec-add':{const n=$('#newSec').value.trim();if(!n){$('#newSec').focus();break}
+      const s=state.data.settings;setSettings({sections:[...readSecNames(),{id:uid(),name:n}]});toast(`"${n}" eklendi`);break}
+    case'sec-move':{const arr=readSecNames(),i=arr.findIndex(x=>x.id===id),j=i+(+b.dataset.k);if(i<0||j<0||j>=arr.length)break;[arr[i],arr[j]]=[arr[j],arr[i]];setSettings({sections:arr});break}
+    case'sec-del':{const sec=sectionById(id);if(!sec)break;const recs=state.data.items.filter(r=>r.section===id);
+      if(!confirm(`"${sec.name}" başlığı${recs.length?` ve içindeki ${recs.length} kayıt`:''} silinsin mi?`))break;
+      const t=now();recs.forEach(r=>state.data.deleted[r.id]=t);state.data.items=state.data.items.filter(r=>r.section!==id);
+      setSettings({sections:readSecNames().filter(x=>x.id!==id)});toast('Silindi');break}
+    case'save-sections':{const hidden=[...document.querySelectorAll('.tabvis')].filter(c=>!c.checked).map(c=>c.dataset.k);
+      setSettings({sections:readSecNames(),hidden});toast('Başlıklar kaydedildi');break}
+    case'setamt':openAmount(b.dataset.key,num(b.dataset.def));break;
     case'save-sync':
       Object.assign(state.cfg,{owner:$('#c_owner').value.trim(),repo:$('#c_repo').value.trim(),branch:$('#c_branch').value.trim()||'main',path:$('#c_path').value.trim()||'data.json',token:$('#c_token').value.trim(),pass:$('#c_pass').value});
       encSalt=null;saveCfg();render();await syncNow();toast($('#syncStatus').classList.contains('err')?'Bağlanılamadı — durum çubuğuna bakın':'Bağlantı tamam');render();break;
