@@ -189,14 +189,16 @@ const SCHEMAS={
       {key:'owner',label:'Kimin',type:'owner',required:true},
       {key:'balance',label:'Bakiye / güncel borç',type:'money',hint:'Kartta ve eksi hesapta kullanılan (borç) tutarı yazın'},
       {key:'limit',label:'Limit',type:'money',hint:'Kart veya eksi hesap limiti'},
+      {key:'minPay',label:'Asgari ödeme tutarı',type:'money',hint:'Kredi kartında bu dönemin asgari ödemesi (ekstreden)'},
       {key:'cutDay',label:'Hesap kesim günü',type:'day'},
       {key:'dueDay',label:'Son ödeme günü',type:'day',hint:'Kartlarda aylık listeye eklenir'},
       {key:'note',label:'Not',type:'textarea',wide:true}],
-    cols:['name','bank','type','owner',{label:'Bakiye / borç',num:true,render:r=>`<span class="amt ${isDebtAcc(r)&&num(r.balance)>0?'out':''}">${money(r.balance)}</span>`},'limit',{label:'Kullanım',render:usageHTML},'dueDay'],
+    cols:['name','bank','type','owner',{label:'Bakiye / borç',num:true,render:r=>`<span class="amt ${isDebtAcc(r)&&num(r.balance)>0?'out':''}">${money(r.balance)}</span>`},{label:'Asgari',num:true,render:r=>r.type==='kart'&&num(r.minPay)?money(r.minPay):''},'limit',{label:'Kullanım',render:usageHTML},'dueDay'],
     defaults:()=>({type:'vadesiz',owner:state.owner==='all'?'p1':state.owner}),
     sort:(a,b)=>ACC_ORDER.indexOf(a.type)-ACC_ORDER.indexOf(b.type)||String(a.name).localeCompare(String(b.name),'tr'),
     summary:rows=>{const cash=sum(rows.filter(a=>!isDebtAcc(a)),a=>num(a.balance)),card=sum(rows.filter(a=>a.type==='kart'),a=>num(a.balance)),kmh=sum(rows.filter(a=>a.type==='kmh'),a=>num(a.balance));
-      return `<span>Hesaplarda: <b>${money(cash)}</b></span><span>Kart borcu: <b class="out">${money(card)}</b></span><span>Eksi hesap: <b class="out">${money(kmh)}</b></span>`}},
+      const minp=sum(rows.filter(a=>a.type==='kart'),a=>num(a.minPay));
+      return `<span>Hesaplarda: <b>${money(cash)}</b></span><span>Kart borcu: <b class="out">${money(card)}</b></span>${minp?`<span>Toplam asgari: <b>${money(minp)}</b></span>`:''}<span>Eksi hesap: <b class="out">${money(kmh)}</b></span>`}},
   incomes:{title:'İş Gelirleri',singular:'İş ödemesi',add:'+ Ödeme ekle',
     fields:[
       {key:'date',label:'Tarih',type:'date',required:true},
@@ -309,7 +311,7 @@ function monthlyItems(ym){
   }
   for(const a of fo(d.accounts)){
     if(a.type!=='kart'||!a.dueDay)continue;
-    items.push({key:`card:${a.id}:${ym}`,day:+a.dueDay,title:`${a.name} — son ödeme`,sub:`${a.bank||'Kredi kartı'}${a.cutDay?` · kesim günü ${a.cutDay}`:''} · güncel borç`,amount:num(a.balance),dir:'out',owner:a.owner});
+    items.push({key:`card:${a.id}:${ym}`,day:+a.dueDay,title:`${a.name} — son ödeme`,sub:`${a.bank||'Kredi kartı'}${a.cutDay?` · kesim günü ${a.cutDay}`:''}${num(a.minPay)?` · asgari ${money(a.minPay)}`:''} · güncel borç`,amount:num(a.balance),dir:'out',owner:a.owner});
   }
   for(const r of fo(d.items)){
     const sec=sectionById(r.section);if(!sec)continue;
@@ -398,7 +400,7 @@ function viewDashboard(){
   <div class="monthbar"><button data-act="ym" data-k="-1">‹</button><b>${ymLabel(ym)}</b><button data-act="ym" data-k="1">›</button>${ym!==cym?'<button class="sm ghost" data-act="ym" data-k="0">Bu ay</button>':''}</div>
   <div class="kpis">
     ${kpi('Hesaplardaki para',money(cash),'Vadesiz, birikim, iş hesabı, nakit')}
-    ${kpi('Kredi kartı borcu',money(card),cardLim?`Limit kullanımı %${Math.round(card/cardLim*100)}`:'',card>0?'out':'')}
+    ${kpi('Kredi kartı borcu',money(card),[sum(cardA,a=>num(a.minPay))?`Asgari toplam ${money(sum(cardA,a=>num(a.minPay)))}`:'',cardLim?`Limit kullanımı %${Math.round(card/cardLim*100)}`:''].filter(Boolean).join(' · '),card>0?'out':'')}
     ${kpi('Eksi hesap (KMH)',money(kmh),kmhLim?`${money(kmhLim)} limitten`:'',kmh>0?'out':'')}
     ${kpi('Kredi & borç (kalan)',money(debt),'',debt>0?'out':'')}
     ${kpi('Alacaklarımız',money(recv),'',recv>0?'in':'')}
@@ -637,7 +639,7 @@ function loadSample(){
   const u=now(),ym=curYM(),d=state.data,id=uid;
   const acc=[
     {id:id(),name:'Maaş hesabı',bank:'Ziraat',type:'vadesiz',owner:'p1',balance:42500},
-    {id:id(),name:'Bonus kart',bank:'Garanti',type:'kart',owner:'p1',balance:18750,limit:60000,cutDay:3,dueDay:13},
+    {id:id(),name:'Bonus kart',bank:'Garanti',type:'kart',owner:'p1',balance:18750,limit:60000,minPay:5625,cutDay:3,dueDay:13},
     {id:id(),name:'World kart',bank:'Yapı Kredi',type:'kart',owner:'p2',balance:9200,limit:25000,cutDay:20,dueDay:30},
     {id:id(),name:'Artı para',bank:'İş Bankası',type:'kmh',owner:'p2',balance:6000,limit:15000},
     {id:id(),name:'Şirket hesabı',bank:'Akbank',type:'isyeri',owner:'ortak',balance:128000}];
