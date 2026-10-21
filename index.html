@@ -692,7 +692,7 @@ document.addEventListener('click',async e=>{
     case'setamt':openAmount(b.dataset.key,num(b.dataset.def));break;
     case'save-sync':
       Object.assign(state.cfg,{owner:$('#c_owner').value.trim(),repo:$('#c_repo').value.trim(),branch:$('#c_branch').value.trim()||'main',path:$('#c_path').value.trim()||'data.json',token:$('#c_token').value.trim(),pass:$('#c_pass').value});
-      encSalt=null;saveCfg();render();await syncNow();toast($('#syncStatus').classList.contains('err')?'Bağlanılamadı — durum çubuğuna bakın':'Bağlantı tamam');render();break;
+      encSalt=null;saveCfg();askPersist();render();await syncNow();toast($('#syncStatus').classList.contains('err')?'Bağlanılamadı — durum çubuğuna bakın':'Bağlantı tamam');render();break;
     case'sync-now':syncNow();break;
     case'disconnect':if(confirm('Bu cihazdaki GitHub token ve parola silinsin mi? (Veriler silinmez)')){state.cfg.token='';state.cfg.pass='';saveCfg();render();setSync('📱 Yalnızca bu cihazda')}break;
     case'export':{
@@ -715,7 +715,10 @@ $('#importFile').addEventListener('change',async e=>{
 window.addEventListener('focus',()=>{if(cfgOk())syncNow()});
 setInterval(()=>{if(document.visibilityState==='visible'&&cfgOk())syncNow()},60000);
 
+// Tarayıcıdan, bu sitenin kayıtlarını kendiliğinden silmemesini iste
+function askPersist(){try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persisted().then(p=>{if(!p)navigator.storage.persist()})}catch{}}
 render();
+if(cfgOk())askPersist();
 syncNow();
 </script>
 </body>
