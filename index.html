@@ -190,10 +190,12 @@ const SCHEMAS={
       {key:'balance',label:'Bakiye / güncel borç',type:'money',hint:'Kartta ve eksi hesapta kullanılan (borç) tutarı yazın'},
       {key:'limit',label:'Limit',type:'money',hint:'Kart veya eksi hesap limiti'},
       {key:'minPay',label:'Asgari ödeme tutarı',type:'money',hint:'Kredi kartında bu dönemin asgari ödemesi (ekstreden)'},
-      {key:'cutDay',label:'Hesap kesim günü',type:'day'},
-      {key:'dueDay',label:'Son ödeme günü',type:'day',hint:'Kartlarda aylık listeye eklenir'},
+      {key:'cutDate',label:'Hesap kesim tarihi',type:'date',hint:'Ekstredeki tarih'},
+      {key:'dueDate',label:'Son ödeme tarihi',type:'date',hint:'Bu tarihin ayında Özet listesine eklenir'},
       {key:'note',label:'Not',type:'textarea',wide:true}],
-    cols:['name','bank','type','owner',{label:'Bakiye / borç',num:true,render:r=>`<span class="amt ${isDebtAcc(r)&&num(r.balance)>0?'out':''}">${money(r.balance)}</span>`},{label:'Asgari',num:true,render:r=>r.type==='kart'&&num(r.minPay)?money(r.minPay):''},'limit',{label:'Kullanım',render:usageHTML},'dueDay'],
+    cols:['name','bank','type','owner',{label:'Bakiye / borç',num:true,render:r=>`<span class="amt ${isDebtAcc(r)&&num(r.balance)>0?'out':''}">${money(r.balance)}</span>`},{label:'Asgari',num:true,render:r=>r.type==='kart'&&num(r.minPay)?money(r.minPay):''},'limit',{label:'Kullanım',render:usageHTML},
+      {label:'Kesim',render:r=>r.cutDate?esc(fmtDate(r.cutDate)):(r.cutDay?`her ay ${esc(r.cutDay)}`:'')},
+      {label:'Son ödeme',render:r=>{if(r.dueDate){const late=r.dueDate<todayISO()&&r.dueDate.slice(0,7)<curYM();return esc(fmtDate(r.dueDate))+(late?' <span class="badge warn">Yenile</span>':'')}return r.dueDay?`her ay ${esc(r.dueDay)}`:''}}],
     defaults:()=>({type:'vadesiz',owner:state.owner==='all'?'p1':state.owner}),
     sort:(a,b)=>ACC_ORDER.indexOf(a.type)-ACC_ORDER.indexOf(b.type)||String(a.name).localeCompare(String(b.name),'tr'),
     summary:rows=>{const cash=sum(rows.filter(a=>!isDebtAcc(a)),a=>num(a.balance)),card=sum(rows.filter(a=>a.type==='kart'),a=>num(a.balance)),kmh=sum(rows.filter(a=>a.type==='kmh'),a=>num(a.balance));
@@ -310,8 +312,12 @@ function monthlyItems(ym){
     items.push({key,day:+x.dueDay||1,title:x.title,sub:`${OPT.debtType[x.type]||''}${x.lender?' · '+x.lender:''}${num(x.count)?` · taksit ${num(x.paidCount)}/${num(x.count)}`:''}`,amount:inst,dir:x.type==='alacak'?'in':'out',owner:x.owner,debt:x.id});
   }
   for(const a of fo(d.accounts)){
-    if(a.type!=='kart'||!a.dueDay)continue;
-    items.push({key:`card:${a.id}:${ym}`,day:+a.dueDay,title:`${a.name} — son ödeme`,sub:`${a.bank||'Kredi kartı'}${a.cutDay?` · kesim günü ${a.cutDay}`:''}${num(a.minPay)?` · asgari ${money(a.minPay)}`:''} · güncel borç`,amount:num(a.balance),dir:'out',owner:a.owner});
+    if(a.type!=='kart')continue;
+    let day;
+    if(a.dueDate){if(a.dueDate.slice(0,7)!==ym)continue;day=+a.dueDate.slice(8,10)}
+    else if(a.dueDay)day=+a.dueDay; else continue;
+    const cut=a.cutDate?` · kesim ${fmtDate(a.cutDate)}`:a.cutDay?` · kesim günü ${a.cutDay}`:'';
+    items.push({key:`card:${a.id}:${ym}`,day,title:`${a.name} — son ödeme`,sub:`${a.bank||'Kredi kartı'}${cut}${num(a.minPay)?` · asgari ${money(a.minPay)}`:''} · güncel borç`,amount:num(a.balance),dir:'out',owner:a.owner});
   }
   for(const r of fo(d.items)){
     const sec=sectionById(r.section);if(!sec)continue;
@@ -384,6 +390,7 @@ function viewDashboard(){
     if(+r.increaseMonth===mNo)rem.push(['📈',`<b>${esc(r.title)}</b> için yıllık kira artış ayı (${MONTHS[mNo-1]}).`]);
     if(r.contractEnd){const dd=daysBetween(tdy,r.contractEnd);if(dd<0)rem.push(['⚠️',`<b>${esc(r.title)}</b> sözleşmesi ${fmtDate(r.contractEnd)} tarihinde bitti.`]);else if(dd<=60)rem.push(['📄',`<b>${esc(r.title)}</b> sözleşmesi ${dd} gün sonra bitiyor.`])}
   }
+  if(ym===curYM())for(const a of cardA)if(a.dueDate&&a.dueDate.slice(0,7)<ym)rem.push(['🗓️',`<b>${esc(a.name)}</b> için yeni ekstrenin kesim ve son ödeme tarihlerini girin (son kayıt: ${fmtDate(a.dueDate)}).`]);
   for(const a of cardA)if(num(a.limit)&&num(a.balance)/num(a.limit)>=.8)rem.push(['💳',`<b>${esc(a.name)}</b> limitinin %${Math.round(num(a.balance)/num(a.limit)*100)}'i dolu.`]);
   for(const a of kmhA)if(num(a.balance)>0)rem.push(['🔴',`<b>${esc(a.name)}</b> eksi hesapta ${money(a.balance)} kullanılıyor — faiz işler.`]);
   for(const i of fo(d.incomes))if(i.status==='bekliyor'&&i.date&&i.date<tdy)rem.push(['⏳',`<b>${esc(i.source)}</b> ödemesi bekleniyor (${fmtDate(i.date)}, ${money(i.amount)}).`]);
@@ -497,8 +504,13 @@ function fieldHTML(f,v){
 }
 function openForm(col,id,copyFrom){
   const S=SCHEMAS[col],dlg=$('#dlg'),form=$('#dlgForm');
-  const rec=id?state.data[col].find(r=>r.id===id):copyFrom?{...copyFrom,date:todayISO()}:S.defaults();
+  let rec=id?state.data[col].find(r=>r.id===id):copyFrom?{...copyFrom,date:todayISO()}:S.defaults();
   if(!rec)return;
+  if(col==='accounts'&&rec.type==='kart'){ // eski "gün" kayıtlarını bu ayın tarihine çevirerek öner
+    const ym=curYM(),last=new Date(+ym.slice(0,4),+ym.slice(5,7),0).getDate(),mk=d=>`${ym}-${pad(Math.min(+d,last))}`;
+    if(!rec.dueDate&&rec.dueDay)rec={...rec,dueDate:mk(rec.dueDay)};
+    if(!rec.cutDate&&rec.cutDay)rec={...rec,cutDate:mk(rec.cutDay)};
+  }
   const secName=col==='items'&&sectionById(rec.section)?sectionById(rec.section).name:S.singular;
   form.innerHTML=`<h3>${id?'Düzenle':'Yeni'}: ${esc(secName)}</h3><div class="fgrid">${S.fields.map(f=>fieldHTML(f,rec[f.key])).join('')}</div>
     <div class="actions"><button type="button" class="ghost" data-act="dlg-close">Vazgeç</button><button type="submit" class="primary">Kaydet</button></div>`;
@@ -511,6 +523,7 @@ function openForm(col,id,copyFrom){
       else if(['int','day','month'].includes(f.type))v=v===''?'':parseInt(v,10);
       out[f.key]=v;
     }
+    if(col==='accounts'){if(out.dueDate)out.dueDay='';if(out.cutDate)out.cutDay=''}
     out.u=now();
     if(id){const i=state.data[col].findIndex(r=>r.id===id);state.data[col][i]=out}else state.data[col].push(out);
     dlg.close();commit();toast('Kaydedildi');
@@ -639,8 +652,8 @@ function loadSample(){
   const u=now(),ym=curYM(),d=state.data,id=uid;
   const acc=[
     {id:id(),name:'Maaş hesabı',bank:'Ziraat',type:'vadesiz',owner:'p1',balance:42500},
-    {id:id(),name:'Bonus kart',bank:'Garanti',type:'kart',owner:'p1',balance:18750,limit:60000,minPay:5625,cutDay:3,dueDay:13},
-    {id:id(),name:'World kart',bank:'Yapı Kredi',type:'kart',owner:'p2',balance:9200,limit:25000,cutDay:20,dueDay:30},
+    {id:id(),name:'Bonus kart',bank:'Garanti',type:'kart',owner:'p1',balance:18750,limit:60000,minPay:5625,cutDate:`${ym}-03`,dueDate:`${ym}-13`},
+    {id:id(),name:'World kart',bank:'Yapı Kredi',type:'kart',owner:'p2',balance:9200,limit:25000,cutDate:`${ym}-20`,dueDate:`${ym}-30`},
     {id:id(),name:'Artı para',bank:'İş Bankası',type:'kmh',owner:'p2',balance:6000,limit:15000},
     {id:id(),name:'Şirket hesabı',bank:'Akbank',type:'isyeri',owner:'ortak',balance:128000}];
   acc.forEach(a=>a.u=u);d.accounts.push(...acc);
